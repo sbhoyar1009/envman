@@ -1,0 +1,11 @@
+{
+  "projectName": "my-awesome-project",
+  "defaultEnvironment": "development",
+  "createdAt": "2026-02-03T05:30:02.937Z",
+  "lastUpdated": "2026-02-03T05:30:02.945Z",
+  "environments": [
+    "development",
+    "staging",
+    "production"
+  ]
+}

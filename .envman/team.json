@@ -1,0 +1,30 @@
+{
+  "members": [
+    {
+      "email": "alice@company.com",
+      "role": "developer",
+      "addedAt": "2026-02-03T00:43:27.907Z",
+      "addedBy": "sbhoyar1009@gmail.com"
+    }
+  ],
+  "roles": {
+    "owner": [
+      "read",
+      "write",
+      "delete",
+      "manage_team"
+    ],
+    "admin": [
+      "read",
+      "write",
+      "delete"
+    ],
+    "developer": [
+      "read",
+      "write"
+    ],
+    "viewer": [
+      "read"
+    ]
+  }
+}
