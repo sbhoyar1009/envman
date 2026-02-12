@@ -74,10 +74,119 @@ export class APIClient {
         }
     }
     /**
+     * Sign up with email and password using Supabase
+     * After signup, auto-login to get session token
+     */
+    async signup(email, password) {
+        try {
+            logger.debug(`Attempting to sign up user: ${email}`);
+            const { data, error } = await this.supabase.auth.signUp({
+                email,
+                password,
+                options: {
+                    emailRedirectTo: undefined
+                }
+            });
+            logger.debug(`Supabase signup response: user=${data?.user?.email || 'null'}, error=${error?.message || 'null'}`);
+            if (error) {
+                logger.error(`Supabase signup error: ${error.message}`);
+                throw new Error(error.message);
+            }
+            if (!data.user) {
+                logger.error('Signup failed - no user returned from Supabase');
+                throw new Error('Signup failed - no user returned');
+            }
+            logger.debug(`User created successfully: ${data.user.email} (ID: ${data.user.id})`);
+            // If we got a session immediately, use it
+            if (data.session) {
+                logger.debug('Session available immediately after signup');
+                await this.supabase.auth.setSession({
+                    access_token: data.session.access_token,
+                    refresh_token: data.session.refresh_token || ''
+                });
+                // Create user profile with active session
+                try {
+                    logger.debug(`Creating user profile for ${data.user.email}`);
+                    const { error: profileError } = await this.supabase
+                        .from('user_profiles')
+                        .upsert({
+                        id: data.user.id,
+                        email: data.user.email,
+                        created_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+                    if (profileError) {
+                        logger.warn(`Failed to create user profile: ${profileError.message}`);
+                    }
+                    else {
+                        logger.debug(`User profile created successfully for ${data.user.email}`);
+                    }
+                }
+                catch (profileError) {
+                    logger.warn(`Error creating user profile: ${profileError instanceof Error ? profileError.message : 'Unknown error'}`);
+                }
+                return {
+                    token: data.session.access_token,
+                    refreshToken: data.session.refresh_token || '',
+                    user: {
+                        email: data.user.email || email,
+                        id: data.user.id
+                    }
+                };
+            }
+            // No immediate session - try to login to get session (user might need email confirmation)
+            logger.debug('No immediate session after signup - attempting auto-login');
+            try {
+                const loginResult = await this.login(email, password);
+                logger.debug(`Auto-login after signup successful for ${email}`);
+                // Create user profile after successful login
+                try {
+                    logger.debug(`Creating user profile for ${data.user.email}`);
+                    const { error: profileError } = await this.supabase
+                        .from('user_profiles')
+                        .upsert({
+                        id: data.user.id,
+                        email: data.user.email,
+                        created_at: new Date().toISOString()
+                    }, { onConflict: 'id' });
+                    if (profileError) {
+                        logger.warn(`Failed to create user profile: ${profileError.message}`);
+                    }
+                    else {
+                        logger.debug(`User profile created successfully for ${data.user.email}`);
+                    }
+                }
+                catch (profileError) {
+                    logger.warn(`Error creating user profile: ${profileError instanceof Error ? profileError.message : 'Unknown error'}`);
+                }
+                return loginResult;
+            }
+            catch (loginError) {
+                logger.warn(`Auto-login after signup failed: ${loginError instanceof Error ? loginError.message : 'Unknown error'}`);
+                // Return user info without token - client can handle pending confirmation
+                return {
+                    token: '',
+                    refreshToken: '',
+                    user: {
+                        email: data.user.email || email,
+                        id: data.user.id
+                    }
+                };
+            }
+        }
+        catch (error) {
+            logger.error(`Signup failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw error;
+        }
+    }
+    /**
      * Push encrypted variables to Supabase
      */
     async pushVariables(project, environment, variables) {
         try {
+            const { data: { user }, error: userError } = await this.supabase.auth.getUser();
+            if (userError || !user) {
+                throw new Error('Not authenticated');
+            }
             // Try to create project (will succeed if it doesn't exist, fail if it does)
             let projectId;
             try {
@@ -85,6 +194,7 @@ export class APIClient {
                     .from('projects')
                     .insert({
                     name: project,
+                    created_by: user.id,
                     created_at: new Date().toISOString()
                 })
                     .select('id')
@@ -114,10 +224,11 @@ export class APIClient {
                         .from('team_members')
                         .insert({
                         project_id: projectId,
-                        email: await this.getCurrentUserEmail(),
+                        user_id: user.id,
+                        email: user.email,
                         role: 'owner',
                         status: 'active',
-                        added_by: await this.getCurrentUserEmail(),
+                        added_by: user.email,
                         added_at: new Date().toISOString()
                     });
                     if (memberError) {
@@ -266,8 +377,13 @@ export class APIClient {
     /**
      * Update API token
      */
-    setToken(token) {
+    setToken(token, refreshToken = '') {
         this.client.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        // Also set the Supabase session with the token
+        this.supabase.auth.setSession({
+            access_token: token,
+            refresh_token: refreshToken
+        });
     }
     /**
      * Clear API token
@@ -540,6 +656,263 @@ export class APIClient {
         catch (error) {
             logger.warn(`Could not verify permissions: ${error instanceof Error ? error.message : 'Unknown error'}`);
             return [];
+        }
+    }
+    /**
+     * Get pending invites for the current user
+     */
+    async getPendingInvites() {
+        try {
+            const { data: { user }, error: userError } = await this.supabase.auth.getUser();
+            if (userError || !user) {
+                throw new Error('Not authenticated');
+            }
+            const { data: invites, error } = await this.supabase
+                .from('team_members')
+                .select(`
+          role,
+          added_by,
+          added_at,
+          projects!inner(name)
+        `)
+                .eq('email', user.email)
+                .eq('status', 'pending');
+            if (error) {
+                throw new Error(`Failed to fetch pending invites: ${error.message}`);
+            }
+            return (invites || []).map(invite => ({
+                project: invite.projects.name,
+                role: invite.role,
+                invitedBy: invite.added_by,
+                invitedAt: invite.added_at
+            }));
+        }
+        catch (error) {
+            logger.error(`Failed to get pending invites: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            return [];
+        }
+    }
+    /**
+     * Accept a pending invite
+     */
+    async acceptInvite(project) {
+        try {
+            const { data: { user }, error: userError } = await this.supabase.auth.getUser();
+            if (userError || !user) {
+                throw new Error('Not authenticated');
+            }
+            // Get project
+            const { data: projectData, error: projectError } = await this.supabase
+                .from('projects')
+                .select('id')
+                .eq('name', project)
+                .single();
+            if (projectError) {
+                throw new Error(`Failed to find project: ${projectError.message}`);
+            }
+            // Update member status to active
+            const { error: updateError } = await this.supabase
+                .from('team_members')
+                .update({ status: 'active' })
+                .eq('project_id', projectData.id)
+                .eq('email', user.email)
+                .eq('status', 'pending');
+            if (updateError) {
+                throw new Error(`Failed to accept invite: ${updateError.message}`);
+            }
+            // Get the role for the response
+            const { data: memberData, error: memberError } = await this.supabase
+                .from('team_members')
+                .select('role')
+                .eq('project_id', projectData.id)
+                .eq('email', user.email)
+                .single();
+            if (memberError) {
+                throw new Error(`Failed to get member role: ${memberError.message}`);
+            }
+            logger.debug(`Successfully accepted invite for ${project}`);
+            return {
+                success: true,
+                message: `Successfully joined ${project}`,
+                data: { project, role: memberData.role }
+            };
+        }
+        catch (error) {
+            logger.error(`Failed to accept invite: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw error;
+        }
+    }
+    /**
+     * Join project by hash
+     */
+    async joinProjectByHash(hash) {
+        try {
+            const { data: { user }, error: userError } = await this.supabase.auth.getUser();
+            if (userError || !user) {
+                throw new Error('Not authenticated');
+            }
+            // Find project by hash
+            const { data: projectData, error: projectError } = await this.supabase
+                .from('projects')
+                .select('id, name')
+                .eq('invite_hash', hash)
+                .single();
+            if (projectError || !projectData) {
+                throw new Error('Invalid or expired invite hash');
+            }
+            // Check if user is already a member
+            const { data: existingMember, error: checkError } = await this.supabase
+                .from('team_members')
+                .select('id')
+                .eq('project_id', projectData.id)
+                .eq('email', user.email)
+                .single();
+            if (checkError && checkError.code !== 'PGRST116') {
+                throw new Error(`Failed to check membership: ${checkError.message}`);
+            }
+            if (existingMember) {
+                throw new Error('You are already a member of this project');
+            }
+            // Add user as member with default role
+            const { error: insertError } = await this.supabase
+                .from('team_members')
+                .insert({
+                project_id: projectData.id,
+                email: user.email,
+                role: 'developer', // Default role for hash joins
+                added_at: new Date().toISOString(),
+                added_by: 'system', // System added via hash
+                status: 'active'
+            });
+            if (insertError) {
+                throw new Error(`Failed to join project: ${insertError.message}`);
+            }
+            logger.debug(`Successfully joined ${projectData.name} via hash`);
+            return {
+                success: true,
+                message: `Successfully joined ${projectData.name}`,
+                data: { project: projectData.name, role: 'developer' }
+            };
+        }
+        catch (error) {
+            logger.error(`Failed to join project by hash: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw error;
+        }
+    }
+    /**
+     * Create a new project explicitly
+     */
+    async createProject(projectName) {
+        try {
+            const { data: { user }, error: userError } = await this.supabase.auth.getUser();
+            if (userError || !user) {
+                throw new Error('Not authenticated');
+            }
+            // Check if project already exists
+            const existing = await this.projectExists(projectName);
+            if (existing) {
+                throw new Error(`Project '${projectName}' already exists`);
+            }
+            // Create project with created_by user ID
+            const { data: newProject, error: createError } = await this.supabase
+                .from('projects')
+                .insert({
+                name: projectName,
+                created_by: user.id, // Link to authenticated user
+                created_at: new Date().toISOString(),
+                invite_hash: this.generateInviteHash() // Generate hash for sharing
+            })
+                .select('id')
+                .single();
+            if (createError) {
+                // Check if it's a schema cache issue
+                if (createError.message.includes('created_by') || createError.message.includes('schema cache')) {
+                    logger.error('⚠️  Schema Cache Issue Detected!');
+                    logger.error('This typically happens when the Supabase schema cache is outdated.');
+                    logger.error('Try restarting the app:');
+                    logger.error('  1. npm run build');
+                    logger.error('  2. npm run dev signup');
+                    logger.error('');
+                    logger.error('If the issue persists, run diagnostic:');
+                    logger.error('  See FIX_SCHEMA_CACHE.md for detailed troubleshooting steps');
+                }
+                throw new Error(`Failed to create project: ${createError.message}`);
+            }
+            // Add creator as owner
+            const { error: memberError } = await this.supabase
+                .from('team_members')
+                .insert({
+                project_id: newProject.id,
+                user_id: user.id, // Link to authenticated user
+                email: user.email,
+                role: 'owner',
+                status: 'active',
+                added_by: user.email,
+                added_at: new Date().toISOString()
+            });
+            if (memberError) {
+                logger.warn(`Failed to add project creator as owner: ${memberError.message}`);
+            }
+            logger.debug(`Successfully created project: ${projectName}`);
+            return {
+                success: true,
+                message: `Successfully created project '${projectName}'`,
+                data: { project: projectName, role: 'owner' }
+            };
+        }
+        catch (error) {
+            logger.error(`Failed to create project: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw error;
+        }
+    }
+    /**
+     * Get project invite hash
+     */
+    async getProjectHash(projectName) {
+        try {
+            const { data: project, error } = await this.supabase
+                .from('projects')
+                .select('invite_hash')
+                .eq('name', projectName)
+                .single();
+            if (error || !project?.invite_hash) {
+                throw new Error('Project hash not found');
+            }
+            return project.invite_hash;
+        }
+        catch (error) {
+            logger.error(`Failed to get project hash: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            throw error;
+        }
+    }
+    /**
+     * Generate a random invite hash
+     */
+    generateInviteHash() {
+        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    }
+    /**
+     * Diagnose schema issues - check if table columns exist
+     */
+    async diagnoseSchema() {
+        try {
+            logger.info('Diagnosing database schema...');
+            // Try to query the projects table with all expected columns
+            const { data, error } = await this.supabase
+                .from('projects')
+                .select('id, name, created_by, invite_hash, created_at, updated_at')
+                .limit(1);
+            if (error) {
+                logger.error(`❌ Schema Error: ${error.message}`);
+                logger.error('   This might be a Supabase schema cache issue.');
+                logger.error('   Try restarting the app: npm run build && npm run dev');
+                return;
+            }
+            logger.success('✅ Projects table schema is correct');
+            logger.info('All expected columns found: id, name, created_by, invite_hash, created_at, updated_at');
+        }
+        catch (error) {
+            logger.error(`Diagnostic check failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }
 }

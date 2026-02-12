@@ -1,11 +1,11 @@
 /**
- * Prompt for user email
+ * Prompt for email
  */
 export declare function promptEmail(): Promise<string>;
 /**
  * Prompt for password
  */
-export declare function promptPassword(): Promise<string>;
+export declare function promptPassword(message?: string): Promise<string>;
 /**
  * Prompt for confirmation
  */
@@ -26,4 +26,17 @@ export declare function promptChoice(message: string, choices: string[], default
  * Prompt for multiple selections
  */
 export declare function promptCheckbox(message: string, choices: string[]): Promise<string[]>;
+/**
+ * Prompt for project hash input
+ */
+export declare function promptProjectHash(): Promise<string>;
+/**
+ * Prompt to select from pending invites
+ */
+export declare function promptPendingInvite(invites: Array<{
+    project: string;
+    role: string;
+    invitedBy: string;
+    invitedAt: string;
+}>): Promise<string | null>;
 //# sourceMappingURL=prompt.d.ts.map

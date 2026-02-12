@@ -1,7 +1,7 @@
 import inquirer from 'inquirer';
 import { validateEmail, validatePassword } from './validators.js';
 /**
- * Prompt for user email
+ * Prompt for email
  */
 export async function promptEmail() {
     const { email } = await inquirer.prompt([
@@ -18,17 +18,17 @@ export async function promptEmail() {
             }
         }
     ]);
-    return email;
+    return email.trim();
 }
 /**
  * Prompt for password
  */
-export async function promptPassword() {
+export async function promptPassword(message = 'Enter your password:') {
     const { password } = await inquirer.prompt([
         {
             type: 'password',
             name: 'password',
-            message: 'Enter your password:',
+            message,
             mask: '*',
             validate: (input) => {
                 if (!input)
@@ -120,5 +120,51 @@ export async function promptCheckbox(message, choices) {
         }
     ]);
     return selected;
+}
+/**
+ * Prompt for project hash input
+ */
+export async function promptProjectHash() {
+    const { hash } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'hash',
+            message: 'Enter project invite hash:',
+            validate: (input) => {
+                if (!input)
+                    return 'Invite hash is required';
+                if (!/^[a-zA-Z0-9]+$/.test(input)) {
+                    return 'Invite hash can only contain letters and numbers';
+                }
+                return true;
+            }
+        }
+    ]);
+    return hash;
+}
+/**
+ * Prompt to select from pending invites
+ */
+export async function promptPendingInvite(invites) {
+    if (invites.length === 0) {
+        return null;
+    }
+    const choices = invites.map(invite => ({
+        name: `${invite.project} (invited by ${invite.invitedBy} as ${invite.role})`,
+        value: invite.project
+    }));
+    choices.push({
+        name: 'Skip - I\'ll join later',
+        value: 'skip'
+    });
+    const { selectedProject } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'selectedProject',
+            message: 'You have pending invites. Which project would you like to join?',
+            choices
+        }
+    ]);
+    return selectedProject === 'skip' ? null : selectedProject;
 }
 //# sourceMappingURL=prompt.js.map

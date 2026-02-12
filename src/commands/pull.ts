@@ -24,6 +24,14 @@ export async function pullCommand(options: PullOptions): Promise<void> {
       process.exit(1)
     }
 
+    // Get and set user credentials to API client
+    const credentials = configManager.getCredentials()
+    if (!credentials) {
+      logger.error('Failed to retrieve credentials')
+      process.exit(1)
+    }
+    apiClient.setToken(credentials.token, credentials.refreshToken)
+
     // Check project initialization
     const projectConfig = configManager.loadProject()
     if (!projectConfig) {

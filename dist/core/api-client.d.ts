@@ -41,6 +41,11 @@ export declare class APIClient {
      */
     login(email: string, password: string): Promise<LoginResponse>;
     /**
+     * Sign up with email and password using Supabase
+     * After signup, auto-login to get session token
+     */
+    signup(email: string, password: string): Promise<LoginResponse>;
+    /**
      * Push encrypted variables to Supabase
      */
     pushVariables(project: string, environment: string, variables: EncryptedVariable[]): Promise<SyncResponse>;
@@ -51,7 +56,7 @@ export declare class APIClient {
     /**
      * Update API token
      */
-    setToken(token: string): void;
+    setToken(token: string, refreshToken?: string): void;
     /**
      * Clear API token
      */
@@ -94,6 +99,48 @@ export declare class APIClient {
      * Check user permissions for a project
      */
     getUserPermissions(project: string, email: string): Promise<string[]>;
+    /**
+     * Get pending invites for the current user
+     */
+    getPendingInvites(): Promise<Array<{
+        project: string;
+        role: string;
+        invitedBy: string;
+        invitedAt: string;
+    }>>;
+    /**
+     * Accept a pending invite
+     */
+    acceptInvite(project: string): Promise<APIResponse<{
+        project: string;
+        role: string;
+    }>>;
+    /**
+     * Join project by hash
+     */
+    joinProjectByHash(hash: string): Promise<APIResponse<{
+        project: string;
+        role: string;
+    }>>;
+    /**
+     * Create a new project explicitly
+     */
+    createProject(projectName: string): Promise<APIResponse<{
+        project: string;
+        role: string;
+    }>>;
+    /**
+     * Get project invite hash
+     */
+    getProjectHash(projectName: string): Promise<string>;
+    /**
+     * Generate a random invite hash
+     */
+    private generateInviteHash;
+    /**
+     * Diagnose schema issues - check if table columns exist
+     */
+    diagnoseSchema(): Promise<void>;
 }
 export declare const apiClient: APIClient;
 //# sourceMappingURL=api-client.d.ts.map

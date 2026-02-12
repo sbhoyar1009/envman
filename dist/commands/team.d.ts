@@ -1,8 +1,9 @@
 import { Command } from 'commander';
 interface TeamOptions {
-    action?: 'list' | 'invite' | 'remove' | 'sync';
+    action?: 'list' | 'invite' | 'remove' | 'sync' | 'join';
     email?: string;
     role?: string;
+    hash?: string;
 }
 /**
  * Team management commands

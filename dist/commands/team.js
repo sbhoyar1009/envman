@@ -16,7 +16,27 @@ export async function teamCommand(options) {
             logger.error('Not authenticated. Please run: envman login');
             process.exit(1);
         }
-        // Check project initialization
+        // Get API client
+        const creds = configManager.getCredentials();
+        apiClient.setToken(creds?.token || '');
+        // Determine action
+        let action = options.action;
+        if (!action) {
+            // Check if user has any projects they can manage
+            const projectConfig = configManager.loadProject();
+            const hasProject = !!projectConfig;
+            const choices = ['join'];
+            if (hasProject) {
+                choices.unshift('list', 'invite', 'remove', 'sync');
+            }
+            action = await promptChoice('What would you like to do?', choices);
+        }
+        // Handle join action (doesn't require existing project)
+        if (action === 'join') {
+            await joinProject(options.hash);
+            return;
+        }
+        // For other actions, check project initialization
         const projectConfig = configManager.loadProject();
         if (!projectConfig) {
             logger.error('Project not initialized. Please run: envman init');
@@ -25,19 +45,6 @@ export async function teamCommand(options) {
         // Check permissions for team management
         await configManager.requirePermission('manage_team', 'manage team members');
         logger.header('👥 Team Management');
-        // Get API client
-        const creds = configManager.getCredentials();
-        apiClient.setToken(creds?.token || '');
-        // Determine action
-        let action = options.action;
-        if (!action) {
-            action = await promptChoice('What would you like to do?', [
-                'list',
-                'invite',
-                'remove',
-                'sync'
-            ]);
-        }
         switch (action) {
             case 'list':
                 await listMembers(apiClient, projectConfig.projectName);
@@ -258,15 +265,49 @@ function saveLocalTeamConfig(config) {
     fs.writeFileSync(teamFile, JSON.stringify(config, null, 2));
 }
 /**
+ * Join a project using invite hash
+ */
+async function joinProject(hash) {
+    try {
+        if (!hash) {
+            const { inputHash } = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'inputHash',
+                    message: 'Enter project invite hash:',
+                    validate: (input) => {
+                        if (!input)
+                            return 'Invite hash is required';
+                        if (!/^[a-zA-Z0-9]+$/.test(input)) {
+                            return 'Invite hash can only contain letters and numbers';
+                        }
+                        return true;
+                    }
+                }
+            ]);
+            hash = inputHash;
+        }
+        const spinner = ora('Joining project...').start();
+        const result = await apiClient.joinProjectByHash(hash);
+        spinner.succeed(result.message);
+        logger.info('✅ Successfully joined the project!');
+        logger.info('💡 You can now push and pull environment variables for this project!');
+    }
+    catch (error) {
+        logger.error(`Failed to join project: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+}
+/**
  * Register team command with Commander
  */
 export function registerTeamCommand(program) {
     program
         .command('team')
         .description('Manage team members and permissions')
-        .option('-a, --action <action>', 'Action: list, invite, remove, sync')
+        .option('-a, --action <action>', 'Action: list, invite, remove, sync, join')
         .option('-e, --email <email>', 'Email address for invite/remove')
         .option('-r, --role <role>', 'Role for new member (viewer, developer, admin)')
+        .option('-h, --hash <hash>', 'Invite hash for joining a project')
         .action(teamCommand);
 }
 //# sourceMappingURL=team.js.map

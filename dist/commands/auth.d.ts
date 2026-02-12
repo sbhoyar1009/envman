@@ -3,6 +3,7 @@ import { Command } from 'commander';
  * Login to envman account
  */
 export declare function loginCommand(): Promise<void>;
+export declare function signupCommand(): Promise<void>;
 /**
  * Logout from envman
  */
